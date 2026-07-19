@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chalak — ฉลาก 3D Label Studio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏷️</text></svg>" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <header class="app-header">
+        <h1>Chalak <span class="thai">ฉลาก</span></h1>
+        <p class="subtitle">3D Print Label Studio — ออกแบบป้ายสำหรับพิมพ์ 3 มิติ</p>
+      </header>
+
+      <section class="panel">
+        <h2>Label / ป้าย</h2>
+        <div class="row">
+          <label>Shape / รูปทรง</label>
+          <select id="shape">
+            <option value="roundedRect" selected>Rounded rectangle</option>
+            <option value="rect">Rectangle</option>
+            <option value="stadium">Stadium (pill)</option>
+            <option value="ellipse">Ellipse</option>
+            <option value="circle">Circle</option>
+            <option value="hexagon">Hexagon</option>
+            <option value="octagon">Octagon</option>
+          </select>
+        </div>
+        <div class="row"><label>Width (mm) <output id="widthOut">80</output></label>
+          <input type="range" id="width" min="10" max="250" step="1" value="80" /></div>
+        <div class="row" id="heightRow"><label>Height (mm) <output id="heightOut">30</output></label>
+          <input type="range" id="height" min="10" max="250" step="1" value="30" /></div>
+        <div class="row" id="radiusRow"><label>Corner radius (mm) <output id="radiusOut">4</output></label>
+          <input type="range" id="radius" min="0" max="30" step="0.5" value="4" /></div>
+        <div class="row"><label>Thickness / ความหนา (mm) <output id="baseThicknessOut">2</output></label>
+          <input type="range" id="baseThickness" min="0.4" max="10" step="0.2" value="2" /></div>
+        <div class="row">
+          <label>Hanging hole / รูแขวน</label>
+          <select id="hole">
+            <option value="none" selected>None</option>
+            <option value="left">Left</option>
+            <option value="right">Right</option>
+            <option value="top">Top center</option>
+          </select>
+        </div>
+        <div class="row" id="holeDiaRow" hidden><label>Hole diameter (mm) <output id="holeDiaOut">4</output></label>
+          <input type="range" id="holeDia" min="1" max="12" step="0.5" value="4" /></div>
+        <div class="row checkbox-row">
+          <label><input type="checkbox" id="border" /> Raised border / ขอบนูน</label>
+        </div>
+        <div id="borderRows" hidden>
+          <div class="row"><label>Border width (mm) <output id="borderWidthOut">1.5</output></label>
+            <input type="range" id="borderWidth" min="0.5" max="8" step="0.25" value="1.5" /></div>
+          <div class="row"><label>Border height (mm) <output id="borderHeightOut">1</output></label>
+            <input type="range" id="borderHeight" min="0.2" max="5" step="0.2" value="1" /></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Text / ข้อความ</h2>
+        <div class="row">
+          <textarea id="text" rows="3" placeholder="Type here… พิมพ์ที่นี่…">สวัสดี
+Hello</textarea>
+        </div>
+        <div class="row">
+          <label>Font / ฟอนต์</label>
+          <select id="font">
+            <option value="Sarabun-Regular" selected>Sarabun</option>
+            <option value="Sarabun-Bold">Sarabun Bold</option>
+            <option value="Kanit-Regular">Kanit</option>
+            <option value="Kanit-Bold">Kanit Bold</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="file-label">Upload font (.ttf/.otf) / อัปโหลดฟอนต์
+            <input type="file" id="fontFile" accept=".ttf,.otf" /></label>
+        </div>
+        <div class="row"><label>Text size (mm) <output id="textSizeOut">10</output></label>
+          <input type="range" id="textSize" min="3" max="60" step="0.5" value="10" /></div>
+        <div class="row"><label>Line spacing <output id="lineSpacingOut">1.2</output></label>
+          <input type="range" id="lineSpacing" min="0.8" max="2.5" step="0.05" value="1.2" /></div>
+        <div class="row">
+          <label>Text style / สไตล์ข้อความ</label>
+          <select id="textMode">
+            <option value="raised" selected>Raised (นูนขึ้น)</option>
+            <option value="engraved">Engraved (สลักลงไป)</option>
+            <option value="flush">Flush — same surface (เรียบเสมอผิวป้าย)</option>
+          </select>
+        </div>
+        <div class="row"><label id="textHeightLabel">Text thickness (mm) <output id="textHeightOut">1</output></label>
+          <input type="range" id="textHeight" min="0.2" max="6" step="0.2" value="1" /></div>
+        <p class="hint" id="textModeHint"></p>
+        <div class="row"><label>Position X (mm) <output id="textXOut">0</output></label>
+          <input type="range" id="textX" min="-100" max="100" step="0.5" value="0" /></div>
+        <div class="row"><label>Position Y (mm) <output id="textYOut">0</output></label>
+          <input type="range" id="textY" min="-100" max="100" step="0.5" value="0" /></div>
+      </section>
+
+      <section class="panel">
+        <h2>SVG logo / โลโก้ SVG</h2>
+        <div class="row">
+          <label class="file-label">Upload SVG / อัปโหลด SVG
+            <input type="file" id="svgFile" accept=".svg" /></label>
+          <button id="svgClear" class="mini-btn" hidden>✕ Remove SVG</button>
+        </div>
+        <div id="svgRows" hidden>
+          <div class="row"><label>SVG width (mm) <output id="svgWidthOut">20</output></label>
+            <input type="range" id="svgWidth" min="2" max="200" step="0.5" value="20" /></div>
+          <div class="row"><label>SVG position X (mm) <output id="svgXOut">0</output></label>
+            <input type="range" id="svgX" min="-120" max="120" step="0.5" value="0" /></div>
+          <div class="row"><label>SVG position Y (mm) <output id="svgYOut">0</output></label>
+            <input type="range" id="svgY" min="-120" max="120" step="0.5" value="0" /></div>
+          <div class="row"><label>SVG rotation (°) <output id="svgRotOut">0</output></label>
+            <input type="range" id="svgRot" min="-180" max="180" step="1" value="0" /></div>
+          <div class="row">
+            <label>Logo style / สไตล์โลโก้</label>
+            <select id="svgMode">
+              <option value="raised" selected>Raised (นูนขึ้น)</option>
+              <option value="engraved">Engraved (สลักลงไป)</option>
+              <option value="flush">Flush — same surface (เรียบเสมอผิวป้าย)</option>
+            </select>
+          </div>
+          <div class="row"><label id="svgHeightLabel">Logo thickness (mm) <output id="svgHeightOut">1</output></label>
+            <input type="range" id="svgHeight" min="0.2" max="6" step="0.2" value="1" /></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Export / ส่งออก</h2>
+        <div class="row">
+          <input type="text" id="filename" value="my-label" spellcheck="false" />
+        </div>
+        <div class="row btn-col">
+          <button id="export3mf" class="btn primary">⬇ Download 3MF — 2 colors ready (Bambu)</button>
+          <button id="exportStl" class="btn">⬇ Download STL (one piece)</button>
+          <button id="exportParts" class="btn">⬇ Download parts (base + design, 2 STLs)</button>
+        </div>
+        <p class="hint">The 3MF opens in Bambu Studio with the base on filament 1 and text/logo on filament 2 — no setup needed. STL exports are single-color; use a layer color change for raised designs. Units are millimeters.</p>
+      </section>
+
+      <footer class="app-footer">
+        <span id="dims"></span>
+      </footer>
+    </aside>
+
+    <main id="viewport">
+      <canvas id="canvas3d"></canvas>
+      <div id="loading">Loading fonts…</div>
+    </main>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

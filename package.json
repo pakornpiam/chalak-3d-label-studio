@@ -1,0 +1,21 @@
+{
+  "name": "chalak-3d-label-studio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "opentype.js": "^1.3.4",
+    "three": "^0.165.0",
+    "three-bvh-csg": "^0.0.16",
+    "three-mesh-bvh": "^0.7.6"
+  },
+  "devDependencies": {
+    "vite": "^5.3.1"
+  }
+}
