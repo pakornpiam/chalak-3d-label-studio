@@ -16,7 +16,7 @@ Then open http://localhost:5173
 - **Shapes**: rounded rectangle, rectangle, stadium (pill), ellipse, circle, hexagon, octagon
 - **Adjustable**: width, height, corner radius, thickness, hanging hole, raised border
 - **Text**: Thai + English (Sarabun / Kanit bundled, upload your own .ttf/.otf), multi-line, size, spacing, position
-- **SVG logo**: upload an SVG with fills and/or stroked lines, scale/move/rotate it. Line drawings are supported: strokes become solid bands, and any line thinner than 0.5 mm (after scaling) is automatically widened to 0.5 mm so it stays printable. SVG text must be converted to paths first (Inkscape → Path → Object to Path)
+- **SVG logo**: upload an SVG with fills and/or stroked lines, scale/move/rotate it. Line drawings are supported: strokes become solid bands, and any line thinner than the adjustable "Min line width" (default 0.8 mm) is automatically widened so it stays printable. Everything is unioned in 2D before extrusion, so exported meshes are watertight. SVG text must be converted to paths first (Inkscape → Path → Object to Path)
 - **Design styles** (set independently for text and logo, each with its own thickness/depth):
   - *Raised* — sticks up from the surface, adjustable thickness
   - *Engraved* — carved into the surface

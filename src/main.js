@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
-import { Brush, Evaluator, SUBTRACTION, INTERSECTION, ADDITION } from 'three-bvh-csg';
+import { Brush, Evaluator, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
+import polygonClipping from 'polygon-clipping';
 import opentype from 'opentype.js';
 import { zipSync, strToU8 } from 'fflate';
 
@@ -13,8 +14,6 @@ const fonts = {}; // name -> opentype.Font
 let svgShapesRaw = null; // untransformed filled shapes from the uploaded SVG
 let svgStrokesRaw = null; // untransformed stroked polylines from the uploaded SVG
 let svgBBox = null;
-
-const MIN_STROKE_MM = 0.5; // thinnest printable line — narrower strokes are widened to this
 
 const evaluator = new Evaluator();
 evaluator.attributes = ['position', 'normal'];
@@ -29,7 +28,7 @@ const ui = {
   textSize: $('textSize'), lineSpacing: $('lineSpacing'), textX: $('textX'), textY: $('textY'),
   textMode: $('textMode'), textHeight: $('textHeight'),
   svgFile: $('svgFile'), svgClear: $('svgClear'),
-  svgWidth: $('svgWidth'), svgX: $('svgX'), svgY: $('svgY'), svgRot: $('svgRot'),
+  svgWidth: $('svgWidth'), svgX: $('svgX'), svgY: $('svgY'), svgRot: $('svgRot'), minLine: $('minLine'),
   svgMode: $('svgMode'), svgHeight: $('svgHeight'),
   filename: $('filename'), exportStl: $('exportStl'), exportParts: $('exportParts'), export3mf: $('export3mf'),
   dims: $('dims'), loading: $('loading'),
@@ -60,6 +59,7 @@ function params() {
     svgX: +ui.svgX.value,
     svgY: +ui.svgY.value,
     svgRot: (+ui.svgRot.value) * Math.PI / 180,
+    minLine: +ui.minLine.value,
     svgMode: ui.svgMode.value,
     svgH: +ui.svgHeight.value,
   };
@@ -237,97 +237,65 @@ function makeSvgTransform(p) {
   return { fn, scale };
 }
 
-function transformedSvgShapes(p) {
-  if (!svgShapesRaw || !svgShapesRaw.length) return [];
-  const { fn } = makeSvgTransform(p);
-  const out = [];
-  for (const s of svgShapesRaw) {
-    const poly = new THREE.Shape(s.getPoints(12).map(fn));
-    poly.holes = s.holes.map((hole) => new THREE.Path(hole.getPoints(12).map(fn)));
-    out.push(poly);
-  }
-  return out;
-}
+// Fills and stroke bands are unioned in 2D (robust polygon booleans), so the
+// SVG becomes plain non-overlapping shapes and every extrusion is watertight.
+// Strokes thinner than the "min line width" setting are widened to it.
+function buildSvgShapes(p) {
+  const { fn, scale } = makeSvgTransform(p);
+  const toRing = (pts) => pts.map((v) => [v.x, v.y]);
+  const polys = [];
 
-// Turn a flat 2D triangulation (z=0) into a closed solid of height `depth`:
-// top + bottom faces plus walls along the open boundary edges.
-function prismFromTriangles(geom2d, depth) {
-  const pos = geom2d.attributes.position;
-  const idx = geom2d.index;
-  const triCount = (idx ? idx.count : pos.count) / 3;
-  const key2id = new Map();
-  const verts = [];
-  const vid = (i) => {
-    const x = pos.getX(i), y = pos.getY(i);
-    const k = `${x.toFixed(4)},${y.toFixed(4)}`;
-    let id = key2id.get(k);
-    if (id === undefined) { id = verts.length; verts.push([x, y]); key2id.set(k, id); }
-    return id;
-  };
-  const tris = [];
-  for (let t = 0; t < triCount; t++) {
-    const i = t * 3;
-    let a = vid(idx ? idx.getX(i) : i);
-    let b = vid(idx ? idx.getX(i + 1) : i + 1);
-    let c = vid(idx ? idx.getX(i + 2) : i + 2);
-    if (a === b || b === c || a === c) continue;
-    const cross = (verts[b][0] - verts[a][0]) * (verts[c][1] - verts[a][1])
-                - (verts[b][1] - verts[a][1]) * (verts[c][0] - verts[a][0]);
-    if (Math.abs(cross) < 1e-9) continue;
-    if (cross < 0) [b, c] = [c, b]; // normalize to CCW so all tops face +z
-    tris.push([a, b, c]);
+  if (svgShapesRaw) {
+    for (const s of svgShapesRaw) {
+      const outer = toRing(s.getPoints(12).map(fn));
+      const holes = s.holes.map((h) => toRing(h.getPoints(12).map(fn)));
+      polys.push([outer, ...holes]);
+    }
   }
-  const edges = new Set();
-  for (const [a, b, c] of tris) for (const [u, v] of [[a, b], [b, c], [c, a]]) edges.add(`${u}_${v}`);
-  const out = [];
-  const push = (id, z) => out.push(verts[id][0], verts[id][1], z);
-  for (const [a, b, c] of tris) { push(a, depth); push(b, depth); push(c, depth); }
-  for (const [a, b, c] of tris) { push(a, 0); push(c, 0); push(b, 0); }
-  for (const [a, b, c] of tris) {
-    for (const [u, v] of [[a, b], [b, c], [c, a]]) {
-      if (!edges.has(`${v}_${u}`)) { // boundary edge -> outward wall
-        push(u, 0); push(v, 0); push(v, depth);
-        push(u, 0); push(v, depth); push(u, depth);
+  if (svgStrokesRaw) {
+    for (const st of svgStrokesRaw) {
+      try {
+        const w = Math.max(st.width * scale, p.minLine);
+        const style = SVGLoader.getStrokeStyle(w, '#000', st.join, st.cap, st.miter);
+        const band = SVGLoader.pointsToStroke(st.points.map(fn), style);
+        if (!band) continue;
+        const pos = band.attributes.position;
+        const idx = band.index;
+        const triCount = (idx ? idx.count : pos.count) / 3;
+        for (let t = 0; t < triCount; t++) {
+          const tri = [0, 1, 2].map((k) => {
+            const vi = idx ? idx.getX(t * 3 + k) : t * 3 + k;
+            return [pos.getX(vi), pos.getY(vi)];
+          });
+          const area = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1])
+                     - (tri[1][1] - tri[0][1]) * (tri[2][0] - tri[0][0]);
+          if (Math.abs(area) > 1e-8) polys.push([tri]);
+        }
+      } catch (err) {
+        console.error('stroke band failed:', err);
       }
     }
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(out), 3));
-  g.computeVertexNormals();
-  return g;
-}
+  if (!polys.length) return [];
 
-// Stroked SVG lines become solid bands (unioned, unit height, scaled to depth later).
-// Any line thinner than MIN_STROKE_MM after scaling is widened to MIN_STROKE_MM.
-let svgStrokeCache = { key: null, solid: null, pts: [] };
-
-function getSvgStrokeSolid(p) {
-  if (!svgStrokesRaw || !svgStrokesRaw.length) return { solid: null, pts: [] };
-  const key = JSON.stringify([svgGen, p.svgW, p.svgX, p.svgY, p.svgRot]);
-  if (svgStrokeCache.key === key) return svgStrokeCache;
-  const { fn, scale } = makeSvgTransform(p);
-  let solid = null;
-  for (const st of svgStrokesRaw) {
-    try {
-      const w = Math.max(st.width * scale, MIN_STROKE_MM);
-      const style = SVGLoader.getStrokeStyle(w, '#000', st.join, st.cap, st.miter);
-      const band = SVGLoader.pointsToStroke(st.points.map(fn), style);
-      if (!band) continue;
-      const prism = prismFromTriangles(band, 1);
-      solid = solid ? csg(solid, prism, ADDITION) : prism;
-    } catch (err) {
-      console.error('stroke band failed:', err);
+  const rawShapes = () => polys.map((pg) => {
+    const shape = new THREE.Shape(pg[0].map(([x, y]) => new THREE.Vector2(x, y)));
+    shape.holes = pg.slice(1).map((r) => new THREE.Path(r.map(([x, y]) => new THREE.Vector2(x, y))));
+    return shape;
+  });
+  try {
+    const mp = polygonClipping.union(...polys.map((pg) => [pg]));
+    const shapes = [];
+    for (const poly of mp) {
+      const shape = new THREE.Shape(poly[0].map(([x, y]) => new THREE.Vector2(x, y)));
+      shape.holes = poly.slice(1).map((r) => new THREE.Path(r.map(([x, y]) => new THREE.Vector2(x, y))));
+      shapes.push(shape);
     }
+    return shapes;
+  } catch (err) {
+    console.error('2D union failed, using raw outlines:', err);
+    return rawShapes();
   }
-  const pts = [];
-  if (solid) {
-    const pa = solid.attributes.position;
-    for (let i = 0; i < pa.count; i++) {
-      if (pa.getZ(i) < 1e-6) pts.push(new THREE.Vector2(pa.getX(i), pa.getY(i)));
-    }
-  }
-  svgStrokeCache = { key, solid, pts };
-  return svgStrokeCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,8 +364,9 @@ function getTextShapes(font, p) {
 }
 
 function getSvgShapes(p) {
-  const key = JSON.stringify([svgGen, p.svgW, p.svgX, p.svgY, p.svgRot]);
-  if (svgCache.key !== key) svgCache = { key, shapes: transformedSvgShapes(p) };
+  if (!svgBBox) return [];
+  const key = JSON.stringify([svgGen, p.svgW, p.svgX, p.svgY, p.svgRot, p.minLine]);
+  if (svgCache.key !== key) svgCache = { key, shapes: buildSvgShapes(p) };
   return svgCache.shapes;
 }
 
@@ -445,33 +414,16 @@ function rebuild() {
     groups.push({ shapes: textShapes, mode: p.textMode, h: p.textMode === 'raised' ? p.textH : clampDepth(p.textH) });
   }
   const svgShapes = getSvgShapes(p);
-  const svgStroke = getSvgStrokeSolid(p);
-  if (svgShapes.length || svgStroke.solid) {
-    groups.push({
-      shapes: svgShapes, strokeSolid: svgStroke.solid, strokePts: svgStroke.pts,
-      mode: p.svgMode, h: p.svgMode === 'raised' ? p.svgH : clampDepth(p.svgH),
-    });
+  if (svgShapes.length) {
+    groups.push({ shapes: svgShapes, mode: p.svgMode, h: p.svgMode === 'raised' ? p.svgH : clampDepth(p.svgH) });
   }
 
   const baseShape = buildBaseShape(p);
   const outlinePts = buildOutline(p.shape, p.w, p.h, p.r).getPoints(48);
   const hc = holeCenter(p);
   for (const grp of groups) {
-    grp.inside = designInsideLabel(grp.shapes, outlinePts, hc, p.holeDia / 2)
-      && (!grp.strokePts || grp.strokePts.every((pt) => pointInPolygon(pt, outlinePts)
-        && (!hc || (pt.x - hc.x) ** 2 + (pt.y - hc.y) ** 2 > (p.holeDia / 2 + 0.6) ** 2)));
+    grp.inside = designInsideLabel(grp.shapes, outlinePts, hc, p.holeDia / 2);
   }
-
-  // extrude a group's fills and add its stroke bands scaled to the same height
-  const groupSolid = (g, depth) => {
-    let geo = extrude(g.shapes, depth);
-    if (g.strokeSolid) {
-      const s = g.strokeSolid.clone();
-      s.scale(1, 1, depth);
-      geo = geo ? mergeGeoms(geo, s) : s;
-    }
-    return geo;
-  };
 
   const maxRaised = Math.max(0, ...groups.filter((g) => g.mode === 'raised').map((g) => g.h));
   // clip volume for designs that stick out past the label edge — built only when needed
@@ -484,7 +436,7 @@ function rebuild() {
   const noCross = carve.length < 2 || !bboxOfShapes(carve[0].shapes).intersectsBox(bboxOfShapes(carve[1].shapes));
   let baseGeom;
 
-  if (carve.length && sameDepth && noCross && carve.every((g) => g.inside && !g.strokeSolid)) {
+  if (carve.length && sameDepth && noCross && carve.every((g) => g.inside)) {
     // fast path (no CSG): bottom slab + top layer where the design outlines are
     // holes, and glyph counters (holes-in-holes) come back as solid islands
     const d = carve[0].h;
@@ -504,7 +456,7 @@ function rebuild() {
     baseGeom = extrude([baseShape], p.baseTh, 12);
     for (const g of carve) {
       try {
-        const cutter = groupSolid(g, g.h + 0.1);
+        const cutter = extrude(g.shapes, g.h + 0.1);
         cutter.translate(0, 0, p.baseTh - g.h);
         baseGeom = csg(baseGeom, cutter, SUBTRACTION);
       } catch (err) {
@@ -519,7 +471,7 @@ function rebuild() {
   for (const grp of groups) {
     if (grp.mode === 'engraved') continue;
     try {
-      let g = groupSolid(grp, grp.h);
+      let g = extrude(grp.shapes, grp.h);
       g.translate(0, 0, grp.mode === 'raised' ? p.baseTh : p.baseTh - grp.h);
       if (!grp.inside) g = csg(g, prism(), INTERSECTION);
       addDesign(g);
