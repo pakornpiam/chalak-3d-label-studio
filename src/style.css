@@ -22,6 +22,22 @@ body {
   flex-direction: column;
 }
 
+#topDonate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 18px;
+  background: #2b1a2e;
+  border-bottom: 1px solid #a34a6f;
+  color: #ff9db8;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+#topDonate:hover { background: #3a2340; color: #ffb8cf; }
+
 #app { display: flex; flex: 1; min-height: 0; }
 
 #sidebar {
