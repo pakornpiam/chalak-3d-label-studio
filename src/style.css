@@ -22,41 +22,6 @@ body {
   flex-direction: column;
 }
 
-/* --- top store banner --- */
-#topBanner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 54px;
-  padding: 0 18px;
-  background: linear-gradient(90deg, #1d2b52 0%, #274170 55%, #6a4a12 100%);
-  border-bottom: 1px solid var(--line);
-  color: var(--text);
-  text-decoration: none;
-  flex-shrink: 0;
-}
-#topBanner:hover .banner-cta { background: #ffca5f; }
-.banner-logo { font-size: 24px; }
-.banner-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
-.banner-text strong { font-size: 15px; letter-spacing: 0.4px; }
-.banner-sub {
-  font-size: 11.5px;
-  color: #b9c6de;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.banner-cta {
-  margin-left: auto;
-  background: var(--accent-2);
-  color: #201503;
-  font-size: 12.5px;
-  font-weight: 700;
-  padding: 7px 14px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
 #app { display: flex; flex: 1; min-height: 0; }
 
 #sidebar {
