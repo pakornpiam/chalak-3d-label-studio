@@ -85,6 +85,8 @@ body {
 .row { margin-bottom: 10px; }
 .row:last-child { margin-bottom: 0; }
 
+#lineSizeRows { margin-bottom: 10px; }
+
 label { display: block; font-size: 13px; color: var(--text); margin-bottom: 4px; }
 label output { float: right; color: var(--accent-2); font-weight: 600; }
 
