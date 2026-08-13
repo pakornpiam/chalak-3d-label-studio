@@ -366,6 +366,7 @@ function csg(geomA, geomB, op) {
 let fontGen = 0, svgGen = 0;
 let lineSizes = [];
 let lastLineSizeText = null;
+let filenameAuto = true; // export filename tracks the label text until the user edits it directly
 let textCache = { key: null, shapes: [] };
 let svgCache = { key: null, shapes: [] };
 
@@ -723,8 +724,25 @@ function syncLineSizeRows() {
   });
 }
 
+// Export filename mirrors the label text (first non-empty line) until the
+// user types their own filename, at which point it stops auto-updating.
+// Checking focus (rather than a dedicated 'input' listener on ui.filename)
+// avoids a listener-ordering race with the generic wiring loop's own 'input'
+// handler, which also calls this via syncVisibility() on every keystroke.
+function syncFilenameFromText() {
+  if (document.activeElement === ui.filename) {
+    filenameAuto = false;
+    return;
+  }
+  if (!filenameAuto) return;
+  const firstLine = ui.text.value.replace(/\r/g, '').split('\n').find((l) => l.trim());
+  const derived = firstLine ? firstLine.trim() : 'label';
+  if (ui.filename.value !== derived) ui.filename.value = derived;
+}
+
 function syncVisibility() {
   syncLineSizeRows();
+  syncFilenameFromText();
   const shape = ui.shape.value;
   $('heightRow').hidden = shape === 'circle';
   $('radiusRow').hidden = shape !== 'roundedRect';
