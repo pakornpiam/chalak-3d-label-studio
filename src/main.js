@@ -345,6 +345,9 @@ const matDesign = new THREE.MeshStandardMaterial({ color: 0xf7b84f, roughness: 0
 
 // exportable geometries of the current model (z-up, mm)
 let currentParts = { base: null, design: null };
+// current 2D outlines, for hit-testing pointer clicks against text/logo footprints
+let textHitShapes = [];
+let svgHitShapes = [];
 
 function extrude(shapes, depth, curveSegments = 6) {
   if (!shapes || !shapes.length) return null;
@@ -402,6 +405,11 @@ function designInsideLabel(shapes, outlinePts, hc, holeR) {
   return true;
 }
 
+function shapesContainPoint(shapes, pt) {
+  for (const s of shapes) if (pointInPolygon(pt, s.getPoints(24))) return true;
+  return false;
+}
+
 function bboxOfShapes(shapes) {
   const b = new THREE.Box2();
   for (const s of shapes) for (const pt of s.getPoints(4)) b.expandByPoint(pt);
@@ -422,10 +430,12 @@ function rebuild() {
   // --- 2D shapes: text and SVG are independent groups with their own style
   const groups = [];
   const textShapes = getTextShapes(font, p);
+  textHitShapes = textShapes;
   if (textShapes.length) {
     groups.push({ shapes: textShapes, mode: p.textMode, h: p.textMode === 'raised' ? p.textH : clampDepth(p.textH) });
   }
   const svgShapes = getSvgShapes(p);
+  svgHitShapes = svgShapes;
   if (svgShapes.length) {
     groups.push({ shapes: svgShapes, mode: p.svgMode, h: p.svgMode === 'raised' ? p.svgH : clampDepth(p.svgH) });
   }
@@ -806,6 +816,105 @@ ui.svgClear.addEventListener('click', () => {
   ui.svgFile.value = '';
   syncVisibility();
   scheduleRebuild();
+});
+
+// ---------------------------------------------------------------------------
+// Drag text/logo directly in the 3D preview
+// ---------------------------------------------------------------------------
+const raycaster = new THREE.Raycaster();
+const pointerNdc = new THREE.Vector2();
+const dragPlane = new THREE.Plane();
+const planeHit = new THREE.Vector3();
+
+let dragState = null; // { kind: 'text' | 'svg', startLocalX, startLocalY, startValX, startValY }
+
+function ndcFromEvent(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+// pick against the real mesh surface on pointerdown, so height (raised bump /
+// flat / engraved cavity floor) is accounted for exactly where the user clicked
+function meshHitLocal(event) {
+  ndcFromEvent(event);
+  raycaster.setFromCamera(pointerNdc, camera);
+  const hits = raycaster.intersectObjects(displayGroup.children);
+  if (!hits.length) return null;
+  return displayGroup.worldToLocal(hits[0].point.clone());
+}
+
+// during a drag, track against a fixed plane through the grabbed point instead —
+// the mesh itself is disposed/rebuilt on every rebuild(), so re-raycasting real
+// geometry on each pointermove would be fragile and wasteful
+function planeHitLocal(event) {
+  ndcFromEvent(event);
+  raycaster.setFromCamera(pointerNdc, camera);
+  if (!raycaster.ray.intersectPlane(dragPlane, planeHit)) return null;
+  return displayGroup.worldToLocal(planeHit.clone());
+}
+
+function endDrag() {
+  if (!dragState) return;
+  dragState = null;
+  controls.enabled = true;
+  renderer.domElement.style.cursor = '';
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', endDrag);
+  window.removeEventListener('pointercancel', endDrag);
+}
+
+function onDragMove(event) {
+  const local = planeHitLocal(event);
+  if (!local) return;
+  const dx = local.x - dragState.startLocalX;
+  const dy = local.y - dragState.startLocalY;
+  const xEl = dragState.kind === 'text' ? ui.textX : ui.svgX;
+  const yEl = dragState.kind === 'text' ? ui.textY : ui.svgY;
+  xEl.value = dragState.startValX + dx;
+  yEl.value = dragState.startValY + dy;
+  $(xEl.id + 'Out').textContent = xEl.value;
+  $(yEl.id + 'Out').textContent = yEl.value;
+  scheduleRebuild();
+}
+
+// capture phase on an ANCESTOR of the canvas (not the canvas itself) is required:
+// OrbitControls' own pointerdown listener already lives on the canvas (the event
+// target), and at-target listeners fire in registration order regardless of the
+// capture flag — only a listener on an ancestor is guaranteed to run first.
+$('viewport').addEventListener('pointerdown', (event) => {
+  if (dragState || event.button !== 0) return;
+  const local = meshHitLocal(event);
+  if (!local) return;
+
+  const pt = { x: local.x, y: local.y };
+  let kind = null;
+  if (shapesContainPoint(textHitShapes, pt)) kind = 'text';
+  else if (shapesContainPoint(svgHitShapes, pt)) kind = 'svg';
+  if (!kind) return; // no group hit -> let OrbitControls handle this event normally
+
+  // OrbitControls checks `scope.enabled` at the top of its own pointerdown
+  // handler, which (per the capture-phase ordering above) hasn't run yet —
+  // so disabling it here is enough to stop it, no need to stop propagation
+  controls.enabled = false;
+  dragState = {
+    kind,
+    startLocalX: local.x,
+    startLocalY: local.y,
+    startValX: kind === 'text' ? +ui.textX.value : +ui.svgX.value,
+    startValY: kind === 'text' ? +ui.textY.value : +ui.svgY.value,
+  };
+  dragPlane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 0, 1), local)
+    .applyMatrix4(displayGroup.matrixWorld);
+  renderer.domElement.style.cursor = 'grabbing';
+
+  window.addEventListener('pointermove', onDragMove);
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+}, { capture: true });
+
+ui.svgClear.addEventListener('click', () => {
+  if (dragState?.kind === 'svg') endDrag();
 });
 
 // ---------------------------------------------------------------------------
