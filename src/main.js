@@ -25,7 +25,7 @@ const ui = {
   baseThickness: $('baseThickness'), hole: $('hole'), holeDia: $('holeDia'),
   border: $('border'), borderWidth: $('borderWidth'), borderHeight: $('borderHeight'),
   text: $('text'), font: $('font'), fontFile: $('fontFile'),
-  textSize: $('textSize'), lineSpacing: $('lineSpacing'), textX: $('textX'), textY: $('textY'),
+  lineSpacing: $('lineSpacing'), textX: $('textX'), textY: $('textY'),
   textMode: $('textMode'), textHeight: $('textHeight'),
   svgFile: $('svgFile'), svgClear: $('svgClear'),
   svgWidth: $('svgWidth'), svgX: $('svgX'), svgY: $('svgY'), svgRot: $('svgRot'), minLine: $('minLine'),
@@ -49,7 +49,7 @@ function params() {
     borderH: +ui.borderHeight.value,
     text: ui.text.value,
     fontName: ui.font.value,
-    textSize: +ui.textSize.value,
+    lineSizes: lineSizes.slice(),
     lineSpacing: +ui.lineSpacing.value,
     textX: +ui.textX.value,
     textY: +ui.textY.value,
@@ -158,12 +158,21 @@ function buildBorderShape(p) {
 // ---------------------------------------------------------------------------
 function textToShapes(font, p) {
   const lines = p.text.replace(/\r/g, '').split('\n');
-  const size = p.textSize;
-  const lineH = size * p.lineSpacing;
-  const totalH = (lines.length - 1) * lineH;
   const upem = font.unitsPerEm;
-  // visual middle of a line relative to its baseline
-  const mid = ((font.ascender + font.descender) / 2 / upem) * size;
+  const sizes = lines.map((_, i) => p.lineSizes[i] ?? p.lineSizes[p.lineSizes.length - 1] ?? 10);
+  const lineH = sizes.map((s) => s * p.lineSpacing);
+  // visual middle of each line relative to its own baseline
+  const mid = sizes.map((s) => ((font.ascender + font.descender) / 2 / upem) * s);
+
+  // stack each line in its own vertical slot (slot height = its own lineH),
+  // then shift the whole stack so it's centered on textY
+  const centers = [];
+  let edge = 0;
+  for (let i = 0; i < lines.length; i++) {
+    centers[i] = edge - lineH[i] / 2;
+    edge -= lineH[i];
+  }
+  const shift = lines.length ? -(centers[0] + centers[lines.length - 1]) / 2 : 0;
 
   const sp = new THREE.ShapePath();
   sp.userData = { style: { fill: '#000', fillOpacity: 1, fillRule: 'nonzero' } };
@@ -171,9 +180,10 @@ function textToShapes(font, p) {
 
   lines.forEach((line, i) => {
     if (!line.trim()) return;
+    const size = sizes[i];
     const advW = font.getAdvanceWidth(line, size, { kerning: true });
     const ox = p.textX - advW / 2;
-    const baselineY = p.textY + totalH / 2 - i * lineH - mid;
+    const baselineY = p.textY + centers[i] + shift - mid[i];
     const path = font.getPath(line, 0, 0, size, { kerning: true, features: true });
     for (const c of path.commands) {
       // opentype is y-down; three.js is y-up -> negate y
@@ -354,11 +364,13 @@ function csg(geomA, geomB, op) {
 
 // --- geometry caches: only recompute 2D outlines when their own inputs change
 let fontGen = 0, svgGen = 0;
+let lineSizes = [];
+let lastLineSizeText = null;
 let textCache = { key: null, shapes: [] };
 let svgCache = { key: null, shapes: [] };
 
 function getTextShapes(font, p) {
-  const key = JSON.stringify([p.text, p.fontName, fontGen, p.textSize, p.lineSpacing, p.textX, p.textY]);
+  const key = JSON.stringify([p.text, p.fontName, fontGen, p.lineSizes, p.lineSpacing, p.textX, p.textY]);
   if (textCache.key !== key) textCache = { key, shapes: textToShapes(font, p) };
   return textCache.shapes;
 }
@@ -665,7 +677,54 @@ function scheduleRebuild() {
   rebuildTimer = setTimeout(rebuild, delay);
 }
 
+// One size slider per line of text, so each line can be scaled independently.
+// Rebuilt only when the text itself changes (not on unrelated slider drags),
+// and each slider is wired directly here since it doesn't exist yet when the
+// app-wide generic wiring loop runs at boot.
+function syncLineSizeRows() {
+  const text = ui.text.value;
+  if (text === lastLineSizeText) return;
+  lastLineSizeText = text;
+
+  const lines = text.replace(/\r/g, '').split('\n');
+  lineSizes.length = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (lineSizes[i] === undefined) lineSizes[i] = lineSizes[i - 1] ?? 10;
+  }
+
+  const container = $('lineSizeRows');
+  container.textContent = '';
+  lines.forEach((line, i) => {
+    const preview = line.trim() ? line.trim().slice(0, 18) : `(empty line ${i + 1})`;
+
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const label = document.createElement('label');
+    label.append(`Line ${i + 1} — ${preview} (mm) `);
+    const out = document.createElement('output');
+    out.textContent = lineSizes[i];
+    label.append(out);
+
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = '3';
+    input.max = '60';
+    input.step = '0.5';
+    input.value = lineSizes[i];
+    input.addEventListener('input', () => {
+      lineSizes[i] = +input.value;
+      out.textContent = input.value;
+      scheduleRebuild();
+    });
+
+    row.append(label, input);
+    container.appendChild(row);
+  });
+}
+
 function syncVisibility() {
+  syncLineSizeRows();
   const shape = ui.shape.value;
   $('heightRow').hidden = shape === 'circle';
   $('radiusRow').hidden = shape !== 'roundedRect';
