@@ -50,6 +50,7 @@ function params() {
     text: ui.text.value,
     fontName: ui.font.value,
     lineSizes: lineSizes.slice(),
+    lineOffsets: lineOffsets.map((o) => ({ x: o?.x ?? 0, y: o?.y ?? 0 })),
     lineSpacing: +ui.lineSpacing.value,
     textX: +ui.textX.value,
     textY: +ui.textY.value,
@@ -174,17 +175,26 @@ function textToShapes(font, p) {
   }
   const shift = lines.length ? -(centers[0] + centers[lines.length - 1]) / 2 : 0;
 
-  const sp = new THREE.ShapePath();
-  sp.userData = { style: { fill: '#000', fillOpacity: 1, fillRule: 'nonzero' } };
-  let any = false;
+  // each line gets its own ShapePath (not one shared path for the whole block):
+  // this keeps hole/counter detection (e.g. the inside of "o"/"e") scoped to that
+  // line's own contours, which matters once dragging can let two lines overlap —
+  // a shared path could otherwise bbox-misclassify a glyph on one line as a hole
+  // of an unrelated, now-overlapping glyph on another line.
+  const shapes = [];
+  const perLine = [];
 
   lines.forEach((line, i) => {
-    if (!line.trim()) return;
+    if (!line.trim()) { perLine[i] = []; return; }
     const size = sizes[i];
+    const off = p.lineOffsets[i] ?? { x: 0, y: 0 };
     const advW = font.getAdvanceWidth(line, size, { kerning: true });
-    const ox = p.textX - advW / 2;
-    const baselineY = p.textY + centers[i] + shift - mid[i];
+    const ox = p.textX - advW / 2 + off.x;
+    const baselineY = p.textY + centers[i] + shift - mid[i] + off.y;
     const path = font.getPath(line, 0, 0, size, { kerning: true, features: true });
+
+    const sp = new THREE.ShapePath();
+    sp.userData = { style: { fill: '#000', fillOpacity: 1, fillRule: 'nonzero' } };
+    let any = false;
     for (const c of path.commands) {
       // opentype is y-down; three.js is y-up -> negate y
       switch (c.type) {
@@ -195,10 +205,12 @@ function textToShapes(font, p) {
         case 'Z': if (sp.currentPath) sp.currentPath.closePath(); break;
       }
     }
+    const lineShapes = any ? SVGLoader.createShapes(sp) : [];
+    perLine[i] = lineShapes;
+    shapes.push(...lineShapes);
   });
 
-  if (!any) return [];
-  return SVGLoader.createShapes(sp);
+  return { shapes, perLine };
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +358,7 @@ const matDesign = new THREE.MeshStandardMaterial({ color: 0xf7b84f, roughness: 0
 // exportable geometries of the current model (z-up, mm)
 let currentParts = { base: null, design: null };
 // current 2D outlines, for hit-testing pointer clicks against text/logo footprints
-let textHitShapes = [];
+let textHitShapesPerLine = []; // one shapes-array per text line, index-aligned with lineOffsets
 let svgHitShapes = [];
 
 function extrude(shapes, depth, curveSegments = 6) {
@@ -368,15 +380,16 @@ function csg(geomA, geomB, op) {
 // --- geometry caches: only recompute 2D outlines when their own inputs change
 let fontGen = 0, svgGen = 0;
 let lineSizes = [];
+let lineOffsets = []; // [{x, y} mm] per-line manual drag offset, additive on top of the auto-stack
 let lastLineSizeText = null;
 let filenameAuto = true; // export filename tracks the label text until the user edits it directly
-let textCache = { key: null, shapes: [] };
+let textCache = { key: null, result: { shapes: [], perLine: [] } };
 let svgCache = { key: null, shapes: [] };
 
 function getTextShapes(font, p) {
-  const key = JSON.stringify([p.text, p.fontName, fontGen, p.lineSizes, p.lineSpacing, p.textX, p.textY]);
-  if (textCache.key !== key) textCache = { key, shapes: textToShapes(font, p) };
-  return textCache.shapes;
+  const key = JSON.stringify([p.text, p.fontName, fontGen, p.lineSizes, p.lineSpacing, p.textX, p.textY, p.lineOffsets]);
+  if (textCache.key !== key) textCache = { key, result: textToShapes(font, p) };
+  return textCache.result;
 }
 
 function getSvgShapes(p) {
@@ -430,8 +443,8 @@ function rebuild() {
 
   // --- 2D shapes: text and SVG are independent groups with their own style
   const groups = [];
-  const textShapes = getTextShapes(font, p);
-  textHitShapes = textShapes;
+  const { shapes: textShapes, perLine: textPerLineShapes } = getTextShapes(font, p);
+  textHitShapesPerLine = textPerLineShapes;
   if (textShapes.length) {
     groups.push({ shapes: textShapes, mode: p.textMode, h: p.textMode === 'raised' ? p.textH : clampDepth(p.textH) });
   }
@@ -692,7 +705,7 @@ function scheduleRebuild() {
 // Rebuilt only when the text itself changes (not on unrelated slider drags),
 // and each slider is wired directly here since it doesn't exist yet when the
 // app-wide generic wiring loop runs at boot.
-function syncLineSizeRows() {
+function syncPerLineState() {
   const text = ui.text.value;
   if (text === lastLineSizeText) return;
   lastLineSizeText = text;
@@ -701,6 +714,15 @@ function syncLineSizeRows() {
   lineSizes.length = lines.length;
   for (let i = 0; i < lines.length; i++) {
     if (lineSizes[i] === undefined) lineSizes[i] = lineSizes[i - 1] ?? 10;
+  }
+  // per-line drag offsets: NOT inherited from a neighbor — an untouched line
+  // must stay at its auto-stacked position. Index-based persistence only
+  // (matches lineSizes' own convention above); deleting a middle line can
+  // cause a later line to inherit a stale offset at the same index — accepted,
+  // same limitation lineSizes already has.
+  lineOffsets.length = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (lineOffsets[i] === undefined) lineOffsets[i] = { x: 0, y: 0 };
   }
 
   const container = $('lineSizeRows');
@@ -751,7 +773,7 @@ function syncFilenameFromText() {
 }
 
 function syncVisibility() {
-  syncLineSizeRows();
+  syncPerLineState();
   syncFilenameFromText();
   const shape = ui.shape.value;
   $('heightRow').hidden = shape === 'circle';
@@ -844,7 +866,19 @@ const pointerNdc = new THREE.Vector2();
 const dragPlane = new THREE.Plane();
 const planeHit = new THREE.Vector3();
 
-let dragState = null; // { kind: 'text' | 'svg', startLocalX, startLocalY, startValX, startValY }
+let dragState = null;
+// text: { kind: 'text', lineIndex, startLocalX, startLocalY, startOffX, startOffY }
+// svg:  { kind: 'svg', startLocalX, startLocalY, startValX, startValY }
+
+const LINE_OFFSET_LIMIT = 100; // mm, matches the textX/textY slider's own min/max
+const clampOffset = (v) => Math.min(LINE_OFFSET_LIMIT, Math.max(-LINE_OFFSET_LIMIT, v));
+
+function lineHitTest(pt) {
+  for (let i = 0; i < textHitShapesPerLine.length; i++) {
+    if (shapesContainPoint(textHitShapesPerLine[i], pt)) return i;
+  }
+  return -1;
+}
 
 function ndcFromEvent(event) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -887,12 +921,19 @@ function onDragMove(event) {
   if (!local) return;
   const dx = local.x - dragState.startLocalX;
   const dy = local.y - dragState.startLocalY;
-  const xEl = dragState.kind === 'text' ? ui.textX : ui.svgX;
-  const yEl = dragState.kind === 'text' ? ui.textY : ui.svgY;
-  xEl.value = dragState.startValX + dx;
-  yEl.value = dragState.startValY + dy;
-  $(xEl.id + 'Out').textContent = xEl.value;
-  $(yEl.id + 'Out').textContent = yEl.value;
+
+  if (dragState.kind === 'text') {
+    const off = lineOffsets[dragState.lineIndex] ?? (lineOffsets[dragState.lineIndex] = { x: 0, y: 0 });
+    off.x = clampOffset(dragState.startOffX + dx);
+    off.y = clampOffset(dragState.startOffY + dy);
+    scheduleRebuild();
+    return;
+  }
+
+  ui.svgX.value = dragState.startValX + dx;
+  ui.svgY.value = dragState.startValY + dy;
+  $('svgXOut').textContent = ui.svgX.value;
+  $('svgYOut').textContent = ui.svgY.value;
   scheduleRebuild();
 }
 
@@ -906,8 +947,12 @@ $('viewport').addEventListener('pointerdown', (event) => {
   if (!local) return;
 
   const pt = { x: local.x, y: local.y };
+  // a stale line index can briefly outrun lineOffsets: lineOffsets resizes the
+  // instant text changes, but textHitShapesPerLine only refreshes once the
+  // debounced rebuild() actually runs — bounds-check before trusting it
+  const lineIndex = lineHitTest(pt);
   let kind = null;
-  if (shapesContainPoint(textHitShapes, pt)) kind = 'text';
+  if (lineIndex !== -1 && lineIndex < lineOffsets.length) kind = 'text';
   else if (shapesContainPoint(svgHitShapes, pt)) kind = 'svg';
   if (!kind) return; // no group hit -> let OrbitControls handle this event normally
 
@@ -915,13 +960,25 @@ $('viewport').addEventListener('pointerdown', (event) => {
   // handler, which (per the capture-phase ordering above) hasn't run yet —
   // so disabling it here is enough to stop it, no need to stop propagation
   controls.enabled = false;
-  dragState = {
-    kind,
-    startLocalX: local.x,
-    startLocalY: local.y,
-    startValX: kind === 'text' ? +ui.textX.value : +ui.svgX.value,
-    startValY: kind === 'text' ? +ui.textY.value : +ui.svgY.value,
-  };
+  if (kind === 'text') {
+    const off = lineOffsets[lineIndex] ?? { x: 0, y: 0 };
+    dragState = {
+      kind: 'text',
+      lineIndex,
+      startLocalX: local.x,
+      startLocalY: local.y,
+      startOffX: off.x,
+      startOffY: off.y,
+    };
+  } else {
+    dragState = {
+      kind: 'svg',
+      startLocalX: local.x,
+      startLocalY: local.y,
+      startValX: +ui.svgX.value,
+      startValY: +ui.svgY.value,
+    };
+  }
   dragPlane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 0, 1), local)
     .applyMatrix4(displayGroup.matrixWorld);
   renderer.domElement.style.cursor = 'grabbing';
