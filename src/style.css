@@ -53,8 +53,8 @@ body {
 #app { display: flex; flex: 1; min-height: 0; }
 
 #sidebar {
-  width: 330px;
-  min-width: 330px;
+  width: 660px;
+  min-width: 660px;
   height: 100%;
   overflow-y: auto;
   background: var(--panel);
